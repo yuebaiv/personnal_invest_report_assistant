@@ -1,0 +1,48 @@
+# 投资监控配置文件
+
+# 关注的指数列表
+indices:
+  # A股指数
+  a_share:
+    - code: "000300"      # 沪深300
+      name: "沪深300"
+    - code: "000688"      # 科创50
+      name: "科创50"
+    - code: "930050"      # 中证A500
+      name: "中证A500"
+    - code: "000001"      # 上证指数
+      name: "上证指数"
+    - code: "399001"      # 深证成指
+      name: "深证成指"
+    - code: "399006"      # 创业板指
+      name: "创业板指"
+
+  # 美股指数
+  us_stock:
+    - code: "^GSPC"       # 标普500
+      name: "标普500"
+    - code: "^IXIC"       # 纳斯达克
+      name: "纳斯达克"
+    - code: "^DJI"        # 道琼斯
+      name: "道琼斯"
+
+# 持仓基金列表 (可手动维护，也可从支付宝账单导入)
+# 格式: 基金代码 -> 持有份额
+portfolio:
+  # 示例：取消注释并填入你的基金
+  # "000001": 1000.00    # 华夏成长
+  # "110011": 500.00     # 易方达中小盘
+
+# 政策信息源
+policy_sources:
+  - name: "央行"
+    url: "http://www.pbc.gov.cn"
+  - name: "证监会"
+    url: "http://www.csrc.gov.cn"
+  - name: "财政部"
+    url: "http://www.mof.gov.cn"
+
+# 报告设置
+report:
+  output_dir: "reports"
+  format: "markdown"  # markdown 或 json
