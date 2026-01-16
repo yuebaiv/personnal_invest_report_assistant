@@ -26,6 +26,8 @@ from src.portfolio import (
 from src.valuation import calculate_portfolio_valuation
 from src.news import collect_daily_news
 from src.report import generate_daily_report, save_raw_data
+from src.technical import run_technical_analysis
+from src.sentiment import run_sentiment_analysis
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
@@ -125,10 +127,12 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python run.py                        # 生成完整报告（含估值和新闻）
+  python run.py                        # 生成完整报告（含估值、技术分析、情绪分析和新闻）
   python run.py --quick                # 快速模式（只看指数）
   python run.py --no-news              # 跳过新闻收集
   python run.py --no-valuation         # 跳过估值计算
+  python run.py --no-technical         # 跳过技术分析
+  python run.py --no-sentiment         # 跳过情绪分析
   python run.py --import-bill xxx.csv  # 导入支付宝账单生成持仓
         """
     )
@@ -157,6 +161,16 @@ def main():
         '--no-news',
         action='store_true',
         help='跳过新闻收集'
+    )
+    parser.add_argument(
+        '--no-technical',
+        action='store_true',
+        help='跳过技术分析（趋势、估值、风险）'
+    )
+    parser.add_argument(
+        '--no-sentiment',
+        action='store_true',
+        help='跳过情绪分析（融资余额、涨跌家数、VIX等）'
     )
     parser.add_argument(
         '--import-bill',
@@ -213,6 +227,20 @@ def main():
     if not args.quick and not args.no_news:
         news_data = run_news_collection()
 
+    # 技术分析
+    technical_data = {}
+    if not args.quick and not args.no_technical:
+        technical_data = run_technical_analysis(
+            indices_data=market_data['indices'],
+            portfolio_data=portfolio_data,
+            config=config
+        )
+
+    # 情绪分析
+    sentiment_data = {}
+    if not args.quick and not args.no_sentiment:
+        sentiment_data = run_sentiment_analysis()
+
     # 生成报告
     print("\n📝 正在生成报告...")
     report = generate_daily_report(
@@ -221,6 +249,8 @@ def main():
         sector_flow=market_data.get('sector_flow'),
         portfolio_data=portfolio_data,
         news_data=news_data,
+        technical_data=technical_data,
+        sentiment_data=sentiment_data,
         output_dir=args.output
     )
 
@@ -230,7 +260,9 @@ def main():
         'north_flow': market_data.get('north_flow'),
         'sector_flow': market_data.get('sector_flow'),
         'portfolio': portfolio_data,
-        'news': news_data
+        'news': news_data,
+        'technical': technical_data,
+        'sentiment': sentiment_data
     }
     save_raw_data(raw_data)
 

@@ -91,9 +91,19 @@ def load_fund_index_mapping() -> dict:
         return {}
 
 
-def get_a_share_index_history(index_code: str, days: int = 60) -> pd.DataFrame:
-    """获取A股指数历史数据"""
-    cache_key = f"a_{index_code}"
+def get_a_share_index_history(index_code: str, days: int = 60, include_volume: bool = False) -> pd.DataFrame:
+    """
+    获取A股指数历史数据
+
+    Args:
+        index_code: 指数代码
+        days: 历史天数
+        include_volume: 是否包含成交额数据
+
+    Returns:
+        DataFrame: date, close, [amount]
+    """
+    cache_key = f"a_{index_code}_{include_volume}"
     if cache_key in _index_history_cache:
         return _index_history_cache[cache_key]
 
@@ -104,7 +114,13 @@ def get_a_share_index_history(index_code: str, days: int = 60) -> pd.DataFrame:
         if df is not None and not df.empty:
             df['date'] = pd.to_datetime(df['日期'])
             df['close'] = df['收盘'].astype(float)
-            df = df[['date', 'close']].sort_values('date')
+
+            if include_volume:
+                df['amount'] = df['成交额'].astype(float)
+                df = df[['date', 'close', 'amount']].sort_values('date')
+            else:
+                df = df[['date', 'close']].sort_values('date')
+
             _index_history_cache[cache_key] = df
             return df
     except Exception as e:

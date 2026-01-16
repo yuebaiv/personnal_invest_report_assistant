@@ -319,6 +319,457 @@ def generate_news_section(news_data: dict) -> str:
     return "\n".join(lines)
 
 
+def format_trend_signal(signal: str) -> str:
+    """格式化趋势信号为emoji"""
+    signal_map = {
+        '多头': '📈 多头',
+        '偏多': '📈 偏多',
+        '空头': '📉 空头',
+        '偏空': '📉 偏空',
+        '震荡': '↔️ 震荡',
+    }
+    return signal_map.get(signal, signal)
+
+
+def format_ma_position(price: float, ma: float) -> str:
+    """格式化均线位置"""
+    if ma is None:
+        return "N/A"
+    if price > ma:
+        return f"↑{ma:.0f}"
+    else:
+        return f"↓{ma:.0f}"
+
+
+def generate_trend_section(technical_data: dict) -> str:
+    """生成趋势分析部分"""
+    if not technical_data:
+        return ""
+
+    lines = ["## 趋势分析\n"]
+
+    # 指数趋势
+    trend_list = technical_data.get('trend', [])
+    if trend_list:
+        # 先检查是否有卖出信号
+        sell_alerts = []
+        for item in trend_list:
+            if 'error' in item:
+                continue
+            sell_signal = item.get('sell_signal', {})
+            if sell_signal.get('should_sell'):
+                sell_alerts.append({
+                    'name': item.get('name'),
+                    'price': item.get('price'),
+                    'ma10': sell_signal.get('ma_value'),
+                    'distance': sell_signal.get('distance_pct')
+                })
+
+        # 显示卖出警报
+        if sell_alerts:
+            lines.append("### ⚠️ 卖出信号\n")
+            for alert in sell_alerts:
+                lines.append(f"- **{alert['name']}** 跌破MA10！当前 {alert['price']:.2f}，MA10={alert['ma10']:.2f}，偏离 **{alert['distance']:.2f}%**")
+            lines.append("")
+
+        lines.append("### 指数趋势\n")
+        lines.append("| 指数 | 现价 | MA5 | MA10 | MA20 | RSI | 趋势 | 信号 |")
+        lines.append("|------|------|-----|------|------|-----|------|------|")
+
+        for item in trend_list:
+            if 'error' in item:
+                continue
+
+            name = item.get('name', '')
+            price = item.get('price', 0)
+            mas = item.get('mas', {})
+            trend = item.get('trend', {})
+            sell_signal = item.get('sell_signal', {})
+            rsi_data = item.get('rsi', {})
+
+            ma5_str = format_ma_position(price, mas.get('ma5'))
+            ma10_str = format_ma_position(price, mas.get('ma10'))
+            ma20_str = format_ma_position(price, mas.get('ma20'))
+
+            trend_str = format_trend_signal(trend.get('signal', ''))
+
+            # RSI显示
+            rsi_val = rsi_data.get('rsi')
+            if rsi_val is not None:
+                rsi_signal = rsi_data.get('signal', 'normal')
+                if rsi_signal in ['very_overbought', 'overbought']:
+                    rsi_str = f"🔴 {rsi_val:.0f}"
+                elif rsi_signal in ['very_oversold', 'oversold']:
+                    rsi_str = f"🟢 {rsi_val:.0f}"
+                else:
+                    rsi_str = f"{rsi_val:.0f}"
+            else:
+                rsi_str = "N/A"
+
+            # 信号判断
+            if sell_signal.get('should_sell'):
+                signal_str = "🔴 卖出"
+            elif sell_signal.get('distance_pct') is not None and sell_signal.get('distance_pct') < 1:
+                signal_str = "🟡 观望"  # 接近MA10
+            else:
+                signal_str = "🟢 持有"
+
+            lines.append(f"| {name} | {price:.2f} | {ma5_str} | {ma10_str} | {ma20_str} | {rsi_str} | {trend_str} | {signal_str} |")
+
+        lines.append("\n> 信号说明：跌破MA10=卖出，距MA10<1%=观望，RSI>70超买，RSI<30超卖\n")
+
+    # 北向资金趋势
+    north = technical_data.get('north_flow', {})
+    if north and 'error' not in north:
+        lines.append("### 北向资金趋势\n")
+
+        recent_5d = north.get('recent_5d')
+        recent_10d = north.get('recent_10d')
+        avg_5d = north.get('avg_5d')
+        consecutive = north.get('consecutive', {})
+
+        if recent_5d is not None:
+            direction = "+" if recent_5d > 0 else ""
+            lines.append(f"- 近5日累计: **{direction}{recent_5d}亿** (日均{avg_5d:+.1f}亿)")
+
+        if recent_10d is not None:
+            direction = "+" if recent_10d > 0 else ""
+            lines.append(f"- 近10日累计: **{direction}{recent_10d}亿**")
+
+        if consecutive.get('direction'):
+            lines.append(f"- 连续{consecutive['direction']}: **{consecutive['days']}天**")
+
+        lines.append("")
+
+    # 成交额对比
+    volume_list = technical_data.get('volume', [])
+    if volume_list:
+        lines.append("### 成交额对比\n")
+        lines.append("| 指数 | 今日 | 5日均值 | 比例 |")
+        lines.append("|------|------|---------|------|")
+
+        for item in volume_list:
+            name = item.get('name', '')
+            today = item.get('today_amount', 0)
+            avg_5d = item.get('avg_5d', 0)
+            ratio = item.get('ratio', 100)
+
+            today_str = format_amount(today / 100000000)
+            avg_str = format_amount(avg_5d / 100000000)
+
+            # 根据比例添加标识
+            ratio_icon = ""
+            if ratio >= 120:
+                ratio_icon = "🔥"
+            elif ratio <= 80:
+                ratio_icon = "❄️"
+
+            lines.append(f"| {name} | {today_str} | {avg_str} | {ratio:.0f}%{ratio_icon} |")
+
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def generate_valuation_section(technical_data: dict) -> str:
+    """生成估值分析部分"""
+    valuation_list = technical_data.get('valuation', [])
+    if not valuation_list:
+        return ""
+
+    lines = ["## 估值分析\n"]
+    lines.append("| 指数 | PE | PE分位(3年) | PB | PB分位(3年) | 水平 |")
+    lines.append("|------|-----|------------|-----|------------|------|")
+
+    for item in valuation_list:
+        name = item.get('name', '')
+        pe = item.get('pe')
+        pb = item.get('pb')
+        pe_pct = item.get('pe_percentile')
+        pb_pct = item.get('pb_percentile')
+        level = item.get('level', '')
+
+        pe_str = f"{pe:.1f}" if pe else "N/A"
+        pb_str = f"{pb:.2f}" if pb else "N/A"
+        pe_pct_str = f"{pe_pct:.0f}%" if pe_pct is not None else "N/A"
+        pb_pct_str = f"{pb_pct:.0f}%" if pb_pct is not None else "N/A"
+
+        # 估值水平emoji
+        level_map = {
+            '低估': '🟢 低估',
+            '中等': '🟡 中等',
+            '高估': '🔴 高估',
+        }
+        level_str = level_map.get(level, level)
+
+        lines.append(f"| {name} | {pe_str} | {pe_pct_str} | {pb_str} | {pb_pct_str} | {level_str} |")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+def generate_sentiment_section(sentiment_data: dict) -> str:
+    """生成市场情绪分析部分"""
+    if not sentiment_data:
+        return ""
+
+    lines = ["## 市场情绪\n"]
+
+    # 融资余额
+    margin = sentiment_data.get('margin', {})
+    if margin and 'error' not in margin:
+        lines.append("### 融资余额\n")
+        current = margin.get('current', 0)
+        change_1d = margin.get('change_1d', 0)
+        change_5d = margin.get('change_5d')
+        change_10d = margin.get('change_10d')
+        avg_5d = margin.get('avg_5d')
+        trend = margin.get('trend', '')
+
+        # current 单位是亿元，转换为万亿显示
+        current_wan_yi = current / 10000
+        lines.append(f"- 两市融资余额: **{current_wan_yi:.2f}万亿** (较昨日 {change_1d:+.1f}亿)")
+        if change_5d is not None:
+            lines.append(f"- 5日变化: **{change_5d:+.0f}亿** (日均{avg_5d:+.1f}亿)")
+        if change_10d is not None:
+            lines.append(f"- 10日变化: **{change_10d:+.0f}亿**")
+
+        # 情绪判断
+        if trend == '增加':
+            lines.append("- 情绪判断: 📈 杠杆资金持续流入\n")
+        elif trend == '减少':
+            lines.append("- 情绪判断: 📉 杠杆资金持续流出\n")
+        else:
+            lines.append("- 情绪判断: ↔️ 杠杆资金变化不大\n")
+
+    # 市场广度
+    breadth = sentiment_data.get('breadth', {})
+    if breadth and 'error' not in breadth:
+        breadth_data = breadth.get('breadth', {})
+        new_high_low = breadth.get('new_high_low', {})
+
+        if breadth_data and 'error' not in breadth_data:
+            lines.append("### 市场广度\n")
+            lines.append("| 指标 | 今日 | 信号 |")
+            lines.append("|------|------|------|")
+
+            rise = breadth_data.get('rise_count', 0)
+            fall = breadth_data.get('fall_count', 0)
+            ratio = breadth_data.get('rise_ratio', 0)
+            limit_up = breadth_data.get('limit_up', 0)
+            limit_down = breadth_data.get('limit_down', 0)
+
+            # 涨跌比信号
+            if ratio > 1.5:
+                ratio_signal = "🟢 强势"
+            elif ratio > 1.0:
+                ratio_signal = "🟢 偏多"
+            elif ratio > 0.67:
+                ratio_signal = "🟡 中性"
+            else:
+                ratio_signal = "🔴 偏空"
+
+            lines.append(f"| 上涨家数 | {rise} | - |")
+            lines.append(f"| 下跌家数 | {fall} | - |")
+            lines.append(f"| 涨跌比 | {ratio:.2f} | {ratio_signal} |")
+            lines.append(f"| 涨停 | {limit_up} | - |")
+            lines.append(f"| 跌停 | {limit_down} | - |")
+
+            # 创新高低
+            if new_high_low and 'error' not in new_high_low:
+                h20 = new_high_low.get('high_20d', 0)
+                l20 = new_high_low.get('low_20d', 0)
+                net = new_high_low.get('net_high_low', 0)
+
+                if net > 50:
+                    net_signal = "🟢 活跃"
+                elif net < -50:
+                    net_signal = "🔴 低迷"
+                else:
+                    net_signal = "🟡 中性"
+
+                lines.append(f"| 20日新高 | {h20} | - |")
+                lines.append(f"| 20日新低 | {l20} | - |")
+                lines.append(f"| 净新高 | {net} | {net_signal} |")
+
+            lines.append("")
+
+    # 无风险利率与股债性价比
+    bond_yield = sentiment_data.get('bond_yield', {})
+    equity_bond = sentiment_data.get('equity_bond', {})
+
+    if (bond_yield and 'error' not in bond_yield) or (equity_bond and 'error' not in equity_bond):
+        lines.append("### 无风险利率\n")
+
+        if bond_yield and 'error' not in bond_yield:
+            cn_10y = bond_yield.get('cn_10y', 0)
+            us_10y = bond_yield.get('us_10y')
+            spread = bond_yield.get('spread')
+            lines.append(f"- 中国10年国债收益率: **{cn_10y:.2f}%**")
+            if us_10y is not None and not is_nan(us_10y):
+                lines.append(f"- 美国10年国债收益率: **{us_10y:.2f}%**")
+            if spread is not None and not is_nan(spread):
+                lines.append(f"- 中美利差: **{spread*100:.0f}bp**")
+
+        if equity_bond and 'error' not in equity_bond:
+            ratio = equity_bond.get('ratio', 0)
+            signal_cn = equity_bond.get('signal_cn', '')
+            pe = equity_bond.get('pe', 0)
+
+            if ratio > 1.5:
+                ratio_icon = "🟢"
+            elif ratio > 1.0:
+                ratio_icon = "🟡"
+            else:
+                ratio_icon = "🔴"
+
+            lines.append(f"- 股债性价比(沪深300): {ratio_icon} **{ratio:.2f}** ({signal_cn})")
+            if pe:
+                lines.append(f"  - 沪深300 PE: {pe:.1f}")
+
+        lines.append("")
+
+    # 全球联动
+    vix = sentiment_data.get('vix', {})
+    usd = sentiment_data.get('usd', {})
+
+    has_global = (vix and 'error' not in vix) or (usd and 'usd_index' in usd)
+    if has_global:
+        lines.append("### 全球联动\n")
+        lines.append("| 指标 | 数值 | 变化 | 信号 |")
+        lines.append("|------|------|------|------|")
+
+        # VIX
+        if vix and 'error' not in vix:
+            vix_val = vix.get('vix', 0)
+            vix_change = vix.get('change', 0)
+            vix_level = vix.get('level_cn', '')
+
+            if vix.get('signal') == 'bullish':
+                vix_icon = "🟢"
+            elif vix.get('signal') in ['bearish', 'very_bearish']:
+                vix_icon = "🔴"
+            else:
+                vix_icon = "🟡"
+
+            lines.append(f"| VIX恐慌指数 | {vix_val:.1f} | {vix_change:+.1f} | {vix_icon} {vix_level} |")
+
+        # 美元指数
+        if usd and 'usd_index' in usd:
+            usd_index = usd.get('usd_index', {})
+            if usd_index and 'error' not in usd_index:
+                usd_val = usd_index.get('value', 0)
+                usd_change = usd_index.get('change_pct', 0)
+
+                if usd_change > 0.5:
+                    usd_icon = "🔴"  # 美元强对A股不利
+                    usd_signal = "美元走强"
+                elif usd_change < -0.5:
+                    usd_icon = "🟢"
+                    usd_signal = "美元走弱"
+                else:
+                    usd_icon = "🟡"
+                    usd_signal = "中性"
+
+                lines.append(f"| 美元指数 | {usd_val:.1f} | {usd_change:+.1f}% | {usd_icon} {usd_signal} |")
+
+            # 离岸人民币
+            usd_cnh = usd.get('usd_cnh', {})
+            if usd_cnh and 'error' not in usd_cnh:
+                cnh_val = usd_cnh.get('value', 0)
+                cnh_change = usd_cnh.get('change_pct', 0)
+
+                if cnh_change > 0.3:
+                    cnh_icon = "🔴"
+                    cnh_signal = "贬值"
+                elif cnh_change < -0.3:
+                    cnh_icon = "🟢"
+                    cnh_signal = "升值"
+                else:
+                    cnh_icon = "🟡"
+                    cnh_signal = "稳定"
+
+                lines.append(f"| 离岸人民币 | {cnh_val:.4f} | {cnh_change:+.2f}% | {cnh_icon} {cnh_signal} |")
+
+        lines.append("")
+
+    # 综合判断
+    summary = sentiment_data.get('summary', {})
+    if summary:
+        score = summary.get('score', 0)
+        signal_cn = summary.get('signal_cn', '')
+        description = summary.get('description', '')
+
+        lines.append("### 情绪综合判断\n")
+
+        if score >= 20:
+            score_icon = "📈"
+        elif score <= -20:
+            score_icon = "📉"
+        else:
+            score_icon = "↔️"
+
+        lines.append(f"- 综合得分: {score_icon} **{score}** ({signal_cn})")
+        if description:
+            lines.append(f"- 主要因素: {description}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def generate_risk_section(technical_data: dict) -> str:
+    """生成持仓风险分析部分"""
+    risk_data = technical_data.get('risk', {})
+    if not risk_data or 'error' in risk_data:
+        return ""
+
+    funds = risk_data.get('funds', [])
+    summary = risk_data.get('summary', {})
+
+    if not funds:
+        return ""
+
+    lines = ["## 持仓风险分析\n"]
+
+    # 汇总信息
+    if summary:
+        avg_dd = summary.get('avg_drawdown')
+        max_dd_fund = summary.get('max_drawdown_fund')
+        max_dd = summary.get('max_drawdown')
+        avg_vol = summary.get('avg_volatility')
+
+        if avg_dd is not None:
+            lines.append(f"- 持仓平均回撤: **{avg_dd:.1f}%**")
+        if max_dd_fund and max_dd is not None:
+            lines.append(f"- 最大回撤基金: {max_dd_fund} (**{max_dd:.1f}%**)")
+        if avg_vol is not None:
+            lines.append(f"- 平均年化波动率: **{avg_vol:.1f}%**")
+        lines.append("")
+
+    # 明细表格
+    lines.append("| 基金名称 | 30日最大回撤 | 回撤区间 | 年化波动率 |")
+    lines.append("|----------|-------------|----------|----------|")
+
+    for fund in funds:
+        if 'error' in fund:
+            continue
+
+        name = fund.get('name', '')
+        display_name = name[:16] + '...' if len(name) > 16 else name
+
+        dd = fund.get('max_drawdown')
+        period = fund.get('drawdown_period', '-')
+        vol = fund.get('volatility')
+
+        dd_str = f"{dd:.1f}%" if dd is not None else "N/A"
+        vol_str = f"{vol:.1f}%" if vol is not None else "N/A"
+
+        lines.append(f"| {display_name} | {dd_str} | {period} | {vol_str} |")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
 def generate_analysis_prompt(indices_data: dict, north_flow: dict, portfolio_data: dict) -> str:
     """生成给 Claude 的分析提示"""
     lines = ["## 分析要点\n"]
@@ -337,6 +788,8 @@ def generate_daily_report(
     sector_flow: list = None,
     portfolio_data: dict = None,
     news_data: dict = None,
+    technical_data: dict = None,
+    sentiment_data: dict = None,
     output_dir: str = "reports"
 ) -> str:
     """生成完整的每日报告"""
@@ -354,6 +807,27 @@ def generate_daily_report(
     lines.append(generate_market_section(indices_data))
     lines.append("\n---\n")
 
+    # 趋势分析（新增）
+    if technical_data:
+        trend_section = generate_trend_section(technical_data)
+        if trend_section:
+            lines.append(trend_section)
+            lines.append("\n---\n")
+
+    # 估值分析（新增）
+    if technical_data:
+        valuation_section = generate_valuation_section(technical_data)
+        if valuation_section:
+            lines.append(valuation_section)
+            lines.append("\n---\n")
+
+    # 市场情绪分析（新增）
+    if sentiment_data:
+        sentiment_section = generate_sentiment_section(sentiment_data)
+        if sentiment_section:
+            lines.append(sentiment_section)
+            lines.append("\n---\n")
+
     # 资金流向
     if north_flow or sector_flow:
         lines.append(generate_flow_section(north_flow or {}, sector_flow or []))
@@ -363,6 +837,13 @@ def generate_daily_report(
     if portfolio_data:
         lines.append(generate_portfolio_section(portfolio_data))
         lines.append("\n---\n")
+
+    # 持仓风险分析（新增）
+    if technical_data:
+        risk_section = generate_risk_section(technical_data)
+        if risk_section:
+            lines.append(risk_section)
+            lines.append("\n---\n")
 
     # 今日要闻
     if news_data:
