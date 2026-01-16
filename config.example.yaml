@@ -1,0 +1,73 @@
+# 投资监控配置文件示例
+# 复制此文件为 config.yaml 并根据你的持仓修改
+
+# 关注的指数列表
+indices:
+  # A股指数
+  a_share:
+    - code: "000300"
+      name: "沪深300"
+    - code: "000688"
+      name: "科创50"
+    - code: "000510"
+      name: "中证A500"
+    - code: "000001"
+      name: "上证指数"
+    - code: "399001"
+      name: "深证成指"
+    - code: "399006"
+      name: "创业板指"
+
+  # 美股指数
+  us_stock:
+    - code: "^GSPC"
+      name: "标普500"
+    - code: "^IXIC"
+      name: "纳斯达克"
+    - code: "^DJI"
+      name: "道琼斯"
+
+# 基金-指数映射
+# 用于估算基金今日涨跌和计算收益
+fund_index_mapping:
+  # ========== A股基金（使用净值计算）==========
+
+  # 示例：中证A500增强
+  "022746":
+    index_code: "000510"
+    index_name: "中证A500"
+    tracking_ratio: 1.15  # 增强型基金，超额收益约15%
+
+  # 示例：科创50联接
+  "011609":
+    index_code: "000688"
+    index_name: "科创50"
+    tracking_ratio: 0.95
+
+  # 示例：沪深300联接
+  "007339":
+    index_code: "000300"
+    index_name: "沪深300"
+    tracking_ratio: 0.95
+
+  # ========== 美股QDII基金（使用指数估算）==========
+  # 注意：必须设置 market: "us"
+
+  # 示例：标普500 QDII
+  "017639":
+    index_code: "^GSPC"
+    index_name: "标普500"
+    tracking_ratio: 0.95
+    market: "us"
+
+  # 示例：纳斯达克100 QDII
+  "017641":
+    index_code: "^NDX"
+    index_name: "纳斯达克100"
+    tracking_ratio: 0.95
+    market: "us"
+
+# 报告设置
+report:
+  output_dir: "reports"
+  format: "markdown"

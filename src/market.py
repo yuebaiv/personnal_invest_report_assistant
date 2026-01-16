@@ -13,24 +13,43 @@ import pandas as pd
 def get_a_share_index(code: str, name: str) -> dict:
     """获取A股指数实时数据"""
     try:
-        # 获取实时行情
+        # 先尝试东方财富数据源
         df = ak.stock_zh_index_spot_em()
         row = df[df['代码'] == code]
 
-        if row.empty:
-            return {"code": code, "name": name, "error": "未找到数据"}
+        if not row.empty:
+            row = row.iloc[0]
+            return {
+                "code": code,
+                "name": name,
+                "price": float(row['最新价']),
+                "change": float(row['涨跌额']),
+                "change_pct": float(row['涨跌幅']),
+                "volume": float(row.get('成交量', 0)),
+                "amount": float(row.get('成交额', 0)),
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
 
-        row = row.iloc[0]
-        return {
-            "code": code,
-            "name": name,
-            "price": float(row['最新价']),
-            "change": float(row['涨跌额']),
-            "change_pct": float(row['涨跌幅']),
-            "volume": float(row.get('成交量', 0)),
-            "amount": float(row.get('成交额', 0)),
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
+        # 如果东财没有，尝试新浪数据源 (深证系列指数)
+        df_sina = ak.stock_zh_index_spot_sina()
+        # 新浪代码格式: sh000001 或 sz399001
+        sina_code = f"sz{code}" if code.startswith('399') else f"sh{code}"
+        row = df_sina[df_sina['代码'] == sina_code]
+
+        if not row.empty:
+            row = row.iloc[0]
+            return {
+                "code": code,
+                "name": name,
+                "price": float(row['最新价']),
+                "change": float(row['涨跌额']),
+                "change_pct": float(row['涨跌幅']),
+                "volume": float(row.get('成交量', 0)),
+                "amount": float(row.get('成交额', 0)),
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+
+        return {"code": code, "name": name, "error": "未找到数据"}
     except Exception as e:
         return {"code": code, "name": name, "error": str(e)}
 
@@ -86,21 +105,65 @@ def get_north_flow() -> dict:
 
 def get_north_flow_today() -> dict:
     """获取今日北向资金实时流入"""
+    import math
+
+    # 方法1: 尝试获取今日资金流向汇总（最可靠）
     try:
-        df = ak.stock_hsgt_north_acc_flow_in_em(symbol="北向资金")
-        if df.empty:
-            return {"error": "未找到北向资金数据"}
-
-        # 最新一条是当前累计
-        latest = df.iloc[-1]
-
-        return {
-            "time": str(latest.get('时间', '')),
-            "net_inflow": float(latest.get('净流入', 0)),  # 净流入(亿)
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
+        df = ak.stock_hsgt_fund_flow_summary_em()
+        if df is not None and not df.empty:
+            # 筛选北向资金（沪股通+深股通）
+            north_df = df[df['资金方向'] == '北向']
+            if not north_df.empty:
+                # 汇总沪股通和深股通的成交净买额
+                total_net = north_df['成交净买额'].sum()
+                if not math.isnan(total_net):
+                    trade_date = str(north_df.iloc[0].get('交易日', ''))
+                    return {
+                        "date": trade_date,
+                        "net_inflow": round(float(total_net), 2),  # 单位：亿元
+                        "detail": {
+                            "沪股通": float(north_df[north_df['板块'] == '沪股通']['成交净买额'].iloc[0]) if len(north_df[north_df['板块'] == '沪股通']) > 0 else 0,
+                            "深股通": float(north_df[north_df['板块'] == '深股通']['成交净买额'].iloc[0]) if len(north_df[north_df['板块'] == '深股通']) > 0 else 0,
+                        },
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
     except Exception as e:
-        return {"error": str(e)}
+        print(f"  获取北向资金汇总失败: {e}")
+
+    # 方法2: 尝试获取分钟级数据的最新值
+    try:
+        df = ak.stock_hsgt_fund_min_em(symbol="北向资金")
+        if df is not None and not df.empty:
+            latest = df.iloc[-1]
+            net_inflow = latest.get('北向资金', 0)
+            if not math.isnan(net_inflow) and net_inflow != 0:
+                return {
+                    "date": str(latest.get('日期', '')),
+                    "net_inflow": round(float(net_inflow), 2),
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+    except Exception:
+        pass
+
+    # 方法3: 回退到历史数据
+    try:
+        df = ak.stock_hsgt_hist_em(symbol="北向资金")
+        if df is not None and not df.empty:
+            # 找最近一条有效数据
+            valid_df = df[df['当日成交净买额'].notna()]
+            if not valid_df.empty:
+                latest = valid_df.iloc[-1]
+                net_inflow = latest.get('当日成交净买额', 0)
+                return {
+                    "date": str(latest.get('日期', '')),
+                    "net_inflow": round(float(net_inflow), 2),
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "note": "历史数据，非实时"
+                }
+    except Exception:
+        pass
+
+    return {"error": "无法获取北向资金数据"}
 
 
 def get_sector_flow() -> list[dict]:

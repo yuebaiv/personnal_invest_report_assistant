@@ -20,13 +20,11 @@ from src.market import (
     get_sector_flow,
 )
 from src.portfolio import (
-    load_manual_portfolio,
     load_portfolio,
-    calculate_portfolio_value,
-    parse_alipay_fund_bill,
-    extract_fund_positions,
-    save_portfolio,
+    build_portfolio_from_alipay,
 )
+from src.valuation import calculate_portfolio_valuation
+from src.news import collect_daily_news
 from src.report import generate_daily_report, save_raw_data
 
 
@@ -64,51 +62,61 @@ def run_market_scan(config: dict, include_flow: bool = True) -> dict:
     return result
 
 
-def run_portfolio_analysis(config: dict, portfolio_file: str = None) -> dict:
+def run_portfolio_analysis(with_valuation: bool = True, indices_data: dict = None) -> dict:
     """执行持仓分析"""
     print("📁 正在分析持仓...")
 
-    # 优先从文件加载，否则从配置加载
-    if portfolio_file:
-        positions = load_portfolio(portfolio_file)
-    else:
-        # 尝试加载已保存的持仓
-        default_portfolio = ROOT_DIR / "data" / "portfolio.json"
-        if default_portfolio.exists():
-            positions = load_portfolio(str(default_portfolio))
-        else:
-            positions = load_manual_portfolio(config)
-
-    if not positions:
-        print("  ⚠ 未找到持仓数据")
+    # 加载持仓数据
+    default_portfolio = ROOT_DIR / "data" / "portfolio.json"
+    if not default_portfolio.exists():
+        print("  ⚠ 未找到持仓数据，请先导入支付宝账单")
+        print("    使用: python run.py --import-bill <账单文件.csv>")
         return {}
 
-    print(f"  ✓ 持仓基金: {len(positions)} 只")
+    portfolio = load_portfolio(str(default_portfolio))
 
-    # 计算持仓价值
-    portfolio_value = calculate_portfolio_value(positions)
-    print(f"  ✓ 总市值: ¥{portfolio_value['total_value']:,.2f}")
+    if not portfolio or 'funds' not in portfolio or not portfolio['funds']:
+        print("  ⚠ 持仓数据为空")
+        return {}
 
-    return portfolio_value
+    fund_count = len(portfolio['funds'])
+    net_invested = portfolio.get('summary', {}).get('net_invested', 0)
+
+    print(f"  ✓ 持仓基金: {fund_count} 只")
+    print(f"  ✓ 净投入: ¥{net_invested:,.2f}")
+
+    if with_valuation:
+        # 计算估值（包含历史净值查询，可能较慢）
+        # 传入指数数据用于估算今日涨跌
+        valuation = calculate_portfolio_valuation(str(default_portfolio), indices_data)
+
+        if 'error' not in valuation:
+            summary = valuation.get('summary', {})
+            total_profit = summary.get('total_profit', 0)
+            total_profit_pct = summary.get('total_profit_pct', 0)
+
+            profit_icon = "📈" if total_profit >= 0 else "📉"
+            print(f"  {profit_icon} 估算盈亏: ¥{total_profit:,.2f} ({total_profit_pct:+.2f}%)")
+
+            # 显示今日估算
+            today_est_profit = summary.get('today_estimated_profit')
+            today_est_pct = summary.get('today_estimated_pct')
+            if today_est_profit is not None:
+                today_icon = "📈" if today_est_profit >= 0 else "📉"
+                print(f"  {today_icon} 今日估算: ¥{today_est_profit:,.2f} ({today_est_pct:+.2f}%)")
+
+            return valuation
+
+    # 简单模式，不计算估值
+    return {
+        'funds': list(portfolio['funds'].values()),
+        'summary': portfolio.get('summary', {}),
+    }
 
 
-def import_alipay_bill(bill_path: str, output_path: str = None):
-    """导入支付宝账单"""
-    print(f"📄 正在导入支付宝账单: {bill_path}")
-
-    records = parse_alipay_fund_bill(bill_path)
-    if not records:
-        print("  ⚠ 未能解析账单数据")
-        return
-
-    print(f"  ✓ 解析到 {len(records)} 条记录")
-
-    positions = extract_fund_positions(records)
-    print(f"  ✓ 提取到 {len(positions)} 只基金持仓")
-
-    # 保存持仓
-    output = output_path or str(ROOT_DIR / "data" / "portfolio.json")
-    save_portfolio(positions, output)
+def run_news_collection() -> dict:
+    """收集新闻资讯"""
+    return collect_daily_news()
 
 
 def main():
@@ -117,10 +125,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python run.py                    # 生成今日完整报告
-  python run.py --quick            # 只看指数，跳过资金流向
-  python run.py --import-bill xxx.csv  # 导入支付宝账单
-  python run.py --no-portfolio     # 不分析持仓
+  python run.py                        # 生成完整报告（含估值和新闻）
+  python run.py --quick                # 快速模式（只看指数）
+  python run.py --no-news              # 跳过新闻收集
+  python run.py --no-valuation         # 跳过估值计算
+  python run.py --import-bill xxx.csv  # 导入支付宝账单生成持仓
         """
     )
 
@@ -132,7 +141,7 @@ def main():
     parser.add_argument(
         '--quick', '-q',
         action='store_true',
-        help='快速模式: 只获取指数数据'
+        help='快速模式: 只获取指数数据，跳过资金流向、新闻和估值'
     )
     parser.add_argument(
         '--no-portfolio',
@@ -140,14 +149,19 @@ def main():
         help='跳过持仓分析'
     )
     parser.add_argument(
+        '--no-valuation',
+        action='store_true',
+        help='跳过估值计算（加快速度）'
+    )
+    parser.add_argument(
+        '--no-news',
+        action='store_true',
+        help='跳过新闻收集'
+    )
+    parser.add_argument(
         '--import-bill',
         metavar='FILE',
         help='导入支付宝基金账单 CSV 文件'
-    )
-    parser.add_argument(
-        '--portfolio-file',
-        metavar='FILE',
-        help='指定持仓数据文件'
     )
     parser.add_argument(
         '--output', '-o',
@@ -164,7 +178,13 @@ def main():
 
     # 导入账单模式
     if args.import_bill:
-        import_alipay_bill(args.import_bill)
+        print("=" * 50)
+        print("🚀 导入支付宝账单")
+        print("=" * 50)
+        build_portfolio_from_alipay(args.import_bill)
+        print("\n" + "=" * 50)
+        print("✅ 导入完成！现在可以运行 python run.py 生成报告")
+        print("=" * 50)
         return
 
     # 加载配置
@@ -175,12 +195,23 @@ def main():
     print("=" * 50)
 
     # 市场扫描
-    market_data = run_market_scan(config, include_flow=not args.quick)
+    include_flow = not args.quick
+    market_data = run_market_scan(config, include_flow=include_flow)
 
     # 持仓分析
     portfolio_data = {}
     if not args.no_portfolio:
-        portfolio_data = run_portfolio_analysis(config, args.portfolio_file)
+        with_valuation = not args.quick and not args.no_valuation
+        # 传入指数数据用于估算今日涨跌
+        portfolio_data = run_portfolio_analysis(
+            with_valuation=with_valuation,
+            indices_data=market_data.get('indices')
+        )
+
+    # 新闻收集
+    news_data = {}
+    if not args.quick and not args.no_news:
+        news_data = run_news_collection()
 
     # 生成报告
     print("\n📝 正在生成报告...")
@@ -189,6 +220,7 @@ def main():
         north_flow=market_data.get('north_flow'),
         sector_flow=market_data.get('sector_flow'),
         portfolio_data=portfolio_data,
+        news_data=news_data,
         output_dir=args.output
     )
 
@@ -197,7 +229,8 @@ def main():
         'indices': market_data['indices'],
         'north_flow': market_data.get('north_flow'),
         'sector_flow': market_data.get('sector_flow'),
-        'portfolio': portfolio_data
+        'portfolio': portfolio_data,
+        'news': news_data
     }
     save_raw_data(raw_data)
 

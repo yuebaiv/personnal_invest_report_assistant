@@ -29,11 +29,17 @@
 ### 常用命令
 
 ```bash
-# 完整报告（包含资金流向）
+# 完整报告（含估值、新闻、资金流向）
 python run.py
 
-# 快速模式（只看指数）
+# 快速模式（只看指数，跳过估值和新闻）
 python run.py --quick
+
+# 跳过新闻收集（加快速度）
+python run.py --no-news
+
+# 跳过估值计算（如果只关心市场数据）
+python run.py --no-valuation
 
 # 导入支付宝账单
 python run.py --import-bill /path/to/alipay_bill.csv
@@ -124,8 +130,10 @@ invest/
 ├── config.yaml         # 配置文件
 ├── CLAUDE.md          # 本文件
 ├── src/
-│   ├── market.py      # 市场数据采集
-│   ├── portfolio.py   # 持仓管理
+│   ├── market.py      # 市场数据采集（指数、资金流向）
+│   ├── portfolio.py   # 持仓管理（支付宝账单导入）
+│   ├── valuation.py   # 估值计算（历史净值、份额估算）
+│   ├── news.py        # 新闻收集（财联社、新闻联播、宏观数据）
 │   └── report.py      # 报告生成
 ├── data/
 │   ├── portfolio.json # 持仓数据

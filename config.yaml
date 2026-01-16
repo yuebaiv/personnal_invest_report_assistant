@@ -8,7 +8,7 @@ indices:
       name: "沪深300"
     - code: "000688"      # 科创50
       name: "科创50"
-    - code: "930050"      # 中证A500
+    - code: "000510"      # 中证A500
       name: "中证A500"
     - code: "000001"      # 上证指数
       name: "上证指数"
@@ -32,6 +32,62 @@ portfolio:
   # 示例：取消注释并填入你的基金
   # "000001": 1000.00    # 华夏成长
   # "110011": 500.00     # 易方达中小盘
+
+# 基金-指数映射 (用于估算基金今日涨跌)
+# 基金净值通常在收盘后2-3小时更新，通过跟踪指数可以实时估算今日表现
+fund_index_mapping:
+  # A股指数基金
+  "022746":  # 博道中证A500指数增强C
+    index_code: "000510"
+    index_name: "中证A500"
+    tracking_ratio: 1.15  # 增强型基金，超额收益约15%
+  "011609":  # 易方达科创50联接C
+    index_code: "000688"
+    index_name: "科创50"
+    tracking_ratio: 0.95
+  "007339":  # 易方达沪深300ETF联接C
+    index_code: "000300"
+    index_name: "沪深300"
+    tracking_ratio: 0.95
+
+  # 美股QDII基金 - 纳斯达克100
+  "017641":  # 摩根纳斯达克100指数(QDII)C
+    index_code: "^NDX"
+    index_name: "纳斯达克100"
+    tracking_ratio: 0.95
+    market: "us"
+  "006480":  # 广发纳斯达克100ETF联接(QDII)C
+    index_code: "^NDX"
+    index_name: "纳斯达克100"
+    tracking_ratio: 0.95
+    market: "us"
+  "019547":  # 招商纳斯达克100ETF联接(QDII)C
+    index_code: "^NDX"
+    index_name: "纳斯达克100"
+    tracking_ratio: 0.95
+    market: "us"
+  "022453":  # 南方纳斯达克100指数(QDII)C
+    index_code: "^NDX"
+    index_name: "纳斯达克100"
+    tracking_ratio: 0.95
+    market: "us"
+  "021966":  # 宝盈纳斯达克100指数(QDII)C
+    index_code: "^NDX"
+    index_name: "纳斯达克100"
+    tracking_ratio: 0.95
+    market: "us"
+
+  # 美股QDII基金 - 标普500
+  "017639":  # 摩根标普500指数(QDII)C
+    index_code: "^GSPC"
+    index_name: "标普500"
+    tracking_ratio: 0.95
+    market: "us"
+  "017243":  # 天弘标普500(QDII-FOF)C
+    index_code: "^GSPC"
+    index_name: "标普500"
+    tracking_ratio: 0.90  # FOF跟踪误差较大
+    market: "us"
 
 # 政策信息源
 policy_sources:
