@@ -54,34 +54,104 @@ def get_a_share_index(code: str, name: str) -> dict:
         return {"code": code, "name": name, "error": str(e)}
 
 
-def get_us_index(code: str, name: str) -> dict:
-    """获取美股指数数据"""
-    try:
-        ticker = yf.Ticker(code)
-        hist = ticker.history(period="2d")
+# akshare全球指数名称映射
+_US_INDEX_NAME_MAP = {
+    '^GSPC': '标普500',
+    '^SPX': '标普500',
+    '^IXIC': '纳斯达克',
+    '^DJI': '道琼斯',
+}
 
-        if hist.empty:
-            return {"code": code, "name": name, "error": "未找到数据"}
+# akshare全球指数数据缓存
+_global_index_cache = None
+_global_index_cache_time = None
 
-        latest = hist.iloc[-1]
-        prev = hist.iloc[-2] if len(hist) > 1 else hist.iloc[0]
 
-        price = float(latest['Close'])
-        prev_close = float(prev['Close'])
-        change = price - prev_close
-        change_pct = (change / prev_close) * 100
+def _get_us_index_from_akshare(code: str, name: str) -> dict:
+    """从akshare获取美股指数（作为备选方案）"""
+    global _global_index_cache, _global_index_cache_time
 
-        return {
-            "code": code,
-            "name": name,
-            "price": round(price, 2),
-            "change": round(change, 2),
-            "change_pct": round(change_pct, 2),
-            "volume": int(latest['Volume']),
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-    except Exception as e:
-        return {"code": code, "name": name, "error": str(e)}
+    # 缓存5分钟
+    now = datetime.now()
+    if _global_index_cache is None or _global_index_cache_time is None or \
+       (now - _global_index_cache_time).seconds > 300:
+        try:
+            _global_index_cache = ak.index_global_spot_em()
+            _global_index_cache_time = now
+        except Exception:
+            return None
+
+    if _global_index_cache is None or _global_index_cache.empty:
+        return None
+
+    # 通过名称匹配
+    ak_name = _US_INDEX_NAME_MAP.get(code)
+    if not ak_name:
+        return None
+
+    row = _global_index_cache[_global_index_cache['名称'] == ak_name]
+    if row.empty:
+        return None
+
+    row = row.iloc[0]
+    return {
+        "code": code,
+        "name": name,
+        "price": float(row['最新价']),
+        "change": float(row['涨跌额']),
+        "change_pct": float(row['涨跌幅']),
+        "volume": 0,  # akshare不提供成交量
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "source": "akshare"
+    }
+
+
+def get_us_index(code: str, name: str, retry: int = 1) -> dict:
+    """获取美股指数数据（先尝试yfinance，失败后用akshare）"""
+    import time
+
+    # 先尝试yfinance
+    for attempt in range(retry + 1):
+        try:
+            ticker = yf.Ticker(code)
+            hist = ticker.history(period="2d")
+
+            if hist.empty:
+                if attempt < retry:
+                    time.sleep(1)
+                    continue
+                break  # 尝试备选方案
+
+            latest = hist.iloc[-1]
+            prev = hist.iloc[-2] if len(hist) > 1 else hist.iloc[0]
+
+            price = float(latest['Close'])
+            prev_close = float(prev['Close'])
+            change = price - prev_close
+            change_pct = (change / prev_close) * 100
+
+            return {
+                "code": code,
+                "name": name,
+                "price": round(price, 2),
+                "change": round(change, 2),
+                "change_pct": round(change_pct, 2),
+                "volume": int(latest['Volume']),
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+        except Exception as e:
+            error_msg = str(e)
+            if "Rate limited" in error_msg and attempt < retry:
+                time.sleep(2)
+                continue
+            break  # 尝试备选方案
+
+    # yfinance失败，尝试akshare
+    ak_result = _get_us_index_from_akshare(code, name)
+    if ak_result:
+        return ak_result
+
+    return {"code": code, "name": name, "error": "获取失败"}
 
 
 def get_north_flow() -> dict:
@@ -258,6 +328,8 @@ def get_fund_realtime_estimate(fund_code: str) -> dict:
 
 def collect_all_indices(config: dict) -> dict:
     """采集所有配置的指数数据"""
+    import time
+
     results = {
         "a_share": [],
         "us_stock": [],
@@ -269,8 +341,11 @@ def collect_all_indices(config: dict) -> dict:
         data = get_a_share_index(idx['code'], idx['name'])
         results['a_share'].append(data)
 
-    # 美股指数
-    for idx in config.get('indices', {}).get('us_stock', []):
+    # 美股指数（添加延迟避免限流）
+    us_indices = config.get('indices', {}).get('us_stock', [])
+    for i, idx in enumerate(us_indices):
+        if i > 0:
+            time.sleep(1)  # 每个请求间隔1秒
         data = get_us_index(idx['code'], idx['name'])
         results['us_stock'].append(data)
 

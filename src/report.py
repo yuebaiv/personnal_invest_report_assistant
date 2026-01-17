@@ -259,6 +259,75 @@ def generate_news_section(news_data: dict) -> str:
 
     lines = ["## 今日要闻\n"]
 
+    # LLM 分析摘要（如果有）
+    llm_analysis = news_data.get('llm_analysis', {})
+    if llm_analysis and 'error' not in llm_analysis:
+        overall_sentiment = llm_analysis.get('overall_sentiment', 0)
+        market_summary = llm_analysis.get('market_summary', '')
+        hot_sectors = llm_analysis.get('hot_sectors', [])
+        resonance = llm_analysis.get('resonance', [])
+
+        # 情绪指标
+        if overall_sentiment != 0 or market_summary:
+            lines.append("### AI 市场情绪分析\n")
+            if overall_sentiment > 0.3:
+                emoji = "🟢"
+                desc = "偏多"
+            elif overall_sentiment < -0.3:
+                emoji = "🔴"
+                desc = "偏空"
+            else:
+                emoji = "🟡"
+                desc = "中性"
+            lines.append(f"- 整体情绪: {emoji} **{desc}** ({overall_sentiment:+.2f})")
+
+            if market_summary:
+                lines.append(f"- 今日概况: {market_summary}")
+
+            if hot_sectors:
+                lines.append(f"- 热点板块: **{', '.join(hot_sectors[:5])}**")
+
+            # 逻辑共振分析
+            if resonance:
+                lines.append("\n**行业逻辑共振分析:**\n")
+                lines.append("| 行业 | 类型 | 分析 |")
+                lines.append("|------|------|------|")
+                for r in resonance[:5]:
+                    sector = r.get('sector', '')
+                    res_type = r.get('type', '')
+                    conclusion = r.get('conclusion', '')
+                    # 类型图标
+                    if res_type == '逻辑共振':
+                        type_icon = "🟢 逻辑共振"
+                    elif res_type == '资金驱动':
+                        type_icon = "🟡 资金驱动"
+                    elif res_type == '利空不跌':
+                        type_icon = "⚡ 利空不跌"
+                    else:
+                        type_icon = res_type or "待分析"
+                    lines.append(f"| {sector} | {type_icon} | {conclusion} |")
+
+            lines.append("")
+
+    # 政策信号（来自新闻联播分析）
+    cctv_analysis = news_data.get('cctv_analysis', {})
+    if cctv_analysis and 'error' not in cctv_analysis:
+        policy_signals = cctv_analysis.get('policy_signals', [])
+        if policy_signals:
+            lines.append("### 政策信号\n")
+            for signal in policy_signals[:5]:
+                direction = signal.get('direction', '')
+                sector = signal.get('sector', '')
+                reasoning = signal.get('reasoning', '')
+                if direction == '利好':
+                    emoji = "🟢"
+                elif direction == '利空':
+                    emoji = "🔴"
+                else:
+                    emoji = "🟡"
+                lines.append(f"- {emoji} **{sector}**: {direction} - {reasoning}")
+            lines.append("")
+
     # 宏观数据
     macro = news_data.get('macro', [])
     if macro:
@@ -275,23 +344,7 @@ def generate_news_section(news_data: dict) -> str:
 
     if important_news:
         lines.append("### 重要资讯\n")
-        for item in important_news[:15]:  # 增加到15条
-            title = item.get('title', item.get('content', ''))
-            if len(title) > 55:
-                title = title[:55] + '...'
-            source = item.get('source', '')
-            time_str = format_news_time(item.get('time', ''))
-            if time_str:
-                lines.append(f"- [{source} {time_str}] {title}")
-            else:
-                lines.append(f"- [{source}] {title}")
-        lines.append("")
-
-    # 其他财经新闻（非重要但可能有参考价值）
-    other_news = [n for n in all_news if not n.get('important')]
-    if other_news:
-        lines.append("### 其他财经快讯\n")
-        for item in other_news[:15]:  # 显示15条普通新闻
+        for item in important_news[:10]:
             title = item.get('title', item.get('content', ''))
             if len(title) > 55:
                 title = title[:55] + '...'
@@ -313,7 +366,7 @@ def generate_news_section(news_data: dict) -> str:
                 lines.append(f"- {title}")
         lines.append("")
 
-    if not macro and not important_news and not cctv:
+    if len(lines) <= 1:
         return ""
 
     return "\n".join(lines)
@@ -341,6 +394,24 @@ def format_ma_position(price: float, ma: float) -> str:
         return f"↓{ma:.0f}"
 
 
+def format_smart_signal(smart_signal: dict) -> str:
+    """格式化智能信号为emoji"""
+    if not smart_signal:
+        return "N/A"
+
+    action = smart_signal.get('action', 'unknown')
+    action_cn = smart_signal.get('action_cn', '未知')
+
+    signal_map = {
+        'buy': '🟢 买入',
+        'hold': '🟢 持有',
+        'watch': '🟡 观望',
+        'reduce': '🟠 减仓',
+        'sell': '🔴 卖出',
+    }
+    return signal_map.get(action, f"⚪ {action_cn}")
+
+
 def generate_trend_section(technical_data: dict) -> str:
     """生成趋势分析部分"""
     if not technical_data:
@@ -351,30 +422,34 @@ def generate_trend_section(technical_data: dict) -> str:
     # 指数趋势
     trend_list = technical_data.get('trend', [])
     if trend_list:
-        # 先检查是否有卖出信号
-        sell_alerts = []
+        # 检查是否有需要关注的信号
+        attention_items = []
         for item in trend_list:
             if 'error' in item:
                 continue
-            sell_signal = item.get('sell_signal', {})
-            if sell_signal.get('should_sell'):
-                sell_alerts.append({
+            smart_signal = item.get('smart_signal', {})
+            action = smart_signal.get('action', '')
+            if action in ['sell', 'reduce']:
+                attention_items.append({
                     'name': item.get('name'),
-                    'price': item.get('price'),
-                    'ma10': sell_signal.get('ma_value'),
-                    'distance': sell_signal.get('distance_pct')
+                    'action_cn': smart_signal.get('action_cn'),
+                    'suggestion': smart_signal.get('suggestion'),
+                    'reasons': smart_signal.get('reasons', [])
                 })
 
-        # 显示卖出警报
-        if sell_alerts:
-            lines.append("### ⚠️ 卖出信号\n")
-            for alert in sell_alerts:
-                lines.append(f"- **{alert['name']}** 跌破MA10！当前 {alert['price']:.2f}，MA10={alert['ma10']:.2f}，偏离 **{alert['distance']:.2f}%**")
+        # 显示需要关注的项目
+        if attention_items:
+            lines.append("### ⚠️ 需要关注\n")
+            for att in attention_items:
+                reasons_str = '、'.join(att['reasons'][:3]) if att['reasons'] else ''
+                lines.append(f"- **{att['name']}**: {att['action_cn']} - {att['suggestion']}")
+                if reasons_str:
+                    lines.append(f"  - 原因: {reasons_str}")
             lines.append("")
 
         lines.append("### 指数趋势\n")
-        lines.append("| 指数 | 现价 | MA5 | MA10 | MA20 | RSI | 趋势 | 信号 |")
-        lines.append("|------|------|-----|------|------|-----|------|------|")
+        lines.append("| 指数 | 现价 | MA10位置 | MA20斜率 | RSI | 趋势 | 建议 |")
+        lines.append("|------|------|----------|---------|-----|------|------|")
 
         for item in trend_list:
             if 'error' in item:
@@ -384,12 +459,40 @@ def generate_trend_section(technical_data: dict) -> str:
             price = item.get('price', 0)
             mas = item.get('mas', {})
             trend = item.get('trend', {})
-            sell_signal = item.get('sell_signal', {})
+            smart_signal = item.get('smart_signal', {})
             rsi_data = item.get('rsi', {})
+            ma20_slope = item.get('ma20_slope')
+            days_below = item.get('days_below_ma10', 0)
 
-            ma5_str = format_ma_position(price, mas.get('ma5'))
-            ma10_str = format_ma_position(price, mas.get('ma10'))
-            ma20_str = format_ma_position(price, mas.get('ma20'))
+            # MA10位置
+            ma10 = mas.get('ma10')
+            if ma10:
+                distance = (price - ma10) / ma10 * 100
+                if distance < -2:
+                    ma10_str = f"🔴 {distance:.1f}%"
+                elif distance < 0:
+                    ma10_str = f"🟡 {distance:.1f}%"
+                elif distance > 3:
+                    ma10_str = f"🟡 +{distance:.1f}%"
+                else:
+                    ma10_str = f"🟢 +{distance:.1f}%"
+                if days_below > 0:
+                    ma10_str += f"({days_below}日)"
+            else:
+                ma10_str = "N/A"
+
+            # MA20斜率
+            if ma20_slope is not None:
+                if ma20_slope > 0.5:
+                    slope_str = f"📈 +{ma20_slope:.1f}%"
+                elif ma20_slope > 0:
+                    slope_str = f"↗️ +{ma20_slope:.1f}%"
+                elif ma20_slope > -0.5:
+                    slope_str = f"↘️ {ma20_slope:.1f}%"
+                else:
+                    slope_str = f"📉 {ma20_slope:.1f}%"
+            else:
+                slope_str = "N/A"
 
             trend_str = format_trend_signal(trend.get('signal', ''))
 
@@ -406,17 +509,36 @@ def generate_trend_section(technical_data: dict) -> str:
             else:
                 rsi_str = "N/A"
 
-            # 信号判断
-            if sell_signal.get('should_sell'):
-                signal_str = "🔴 卖出"
-            elif sell_signal.get('distance_pct') is not None and sell_signal.get('distance_pct') < 1:
-                signal_str = "🟡 观望"  # 接近MA10
-            else:
-                signal_str = "🟢 持有"
+            # 智能信号
+            signal_str = format_smart_signal(smart_signal)
 
-            lines.append(f"| {name} | {price:.2f} | {ma5_str} | {ma10_str} | {ma20_str} | {rsi_str} | {trend_str} | {signal_str} |")
+            lines.append(f"| {name} | {price:.2f} | {ma10_str} | {slope_str} | {rsi_str} | {trend_str} | {signal_str} |")
 
-        lines.append("\n> 信号说明：跌破MA10=卖出，距MA10<1%=观望，RSI>70超买，RSI<30超卖\n")
+        lines.append("\n> 建议说明：综合MA位置、MA20斜率、成交量、RSI、市场广度等多因素判断\n")
+
+        # 显示智能信号详情
+        lines.append("### 信号详情\n")
+        for item in trend_list:
+            if 'error' in item:
+                continue
+            smart_signal = item.get('smart_signal', {})
+            if not smart_signal:
+                continue
+
+            name = item.get('name', '')
+            action_cn = smart_signal.get('action_cn', '')
+            suggestion = smart_signal.get('suggestion', '')
+            reasons = smart_signal.get('reasons', [])
+            scores = smart_signal.get('scores', {})
+
+            score_str = f"(多:{scores.get('buy_score', 0)} 空:{scores.get('sell_score', 0)} 净:{scores.get('net_score', 0)})"
+            reasons_str = '、'.join(reasons[:4]) if reasons else '无特殊因素'
+
+            lines.append(f"- **{name}**: {action_cn} {score_str}")
+            lines.append(f"  - {suggestion}")
+            lines.append(f"  - 依据: {reasons_str}")
+
+        lines.append("")
 
     # 北向资金趋势
     north = technical_data.get('north_flow', {})
@@ -519,16 +641,21 @@ def generate_sentiment_section(sentiment_data: dict) -> str:
     margin = sentiment_data.get('margin', {})
     if margin and 'error' not in margin:
         lines.append("### 融资余额\n")
-        current = margin.get('current', 0)
-        change_1d = margin.get('change_1d', 0)
+        current = margin.get('current', 0) or 0
+        change_1d = margin.get('change_1d', 0) or 0
         change_5d = margin.get('change_5d')
         change_10d = margin.get('change_10d')
         avg_5d = margin.get('avg_5d')
         trend = margin.get('trend', '')
 
-        # current 单位是亿元，转换为万亿显示
-        current_wan_yi = current / 10000
-        lines.append(f"- 两市融资余额: **{current_wan_yi:.2f}万亿** (较昨日 {change_1d:+.1f}亿)")
+        # 检查是否有有效数据（融资余额应该在万亿级别）
+        if current and current > 100:  # 100亿以上才算有效数据
+            # current 单位是亿元，转换为万亿显示
+            current_wan_yi = current / 10000
+            lines.append(f"- 两市融资余额: **{current_wan_yi:.2f}万亿** (较昨日 {change_1d:+.1f}亿)")
+        else:
+            # 数据未更新或获取失败
+            lines.append("- 两市融资余额: **数据未更新**")
         if change_5d is not None:
             lines.append(f"- 5日变化: **{change_5d:+.0f}亿** (日均{avg_5d:+.1f}亿)")
         if change_10d is not None:
@@ -615,6 +742,7 @@ def generate_sentiment_section(sentiment_data: dict) -> str:
             ratio = equity_bond.get('ratio', 0)
             signal_cn = equity_bond.get('signal_cn', '')
             pe = equity_bond.get('pe', 0)
+            pe_percentile = equity_bond.get('pe_percentile')
 
             if ratio > 1.5:
                 ratio_icon = "🟢"
@@ -626,6 +754,11 @@ def generate_sentiment_section(sentiment_data: dict) -> str:
             lines.append(f"- 股债性价比(沪深300): {ratio_icon} **{ratio:.2f}** ({signal_cn})")
             if pe:
                 lines.append(f"  - 沪深300 PE: {pe:.1f}")
+
+            # 当股债性价比高但估值也高时，添加解释
+            if ratio > 1.5 and pe_percentile and pe_percentile > 70:
+                lines.append("")
+                lines.append(f"> ⚠️ **特殊情境说明**: 受无风险利率大幅下行影响(10年国债{cn_10y:.2f}%)，股票资产相对价值凸显(股债比{ratio:.2f})，但绝对估值已处于近三年{pe_percentile:.0f}%分位。建议关注利率拐点风险。")
 
         lines.append("")
 
@@ -782,6 +915,103 @@ def generate_analysis_prompt(indices_data: dict, north_flow: dict, portfolio_dat
     return "\n".join(lines)
 
 
+def generate_recommendations_section(technical_data: dict) -> str:
+    """生成情境化投资建议部分"""
+    recommendations = technical_data.get('recommendations', [])
+
+    if not recommendations:
+        return ""
+
+    lines = ["## 📋 投资建议\n"]
+    lines.append("> 基于趋势、估值、持仓的多维度情境化分析\n")
+
+    # 建议汇总表格
+    lines.append("### 建议汇总\n")
+    lines.append("| 指数 | 建议 | 情境 | 信心 | 趋势 | 估值 | 仓位 | 风险 |")
+    lines.append("|------|------|------|------|------|------|------|------|")
+
+    # 动作对应的图标
+    action_icons = {
+        'strong_buy': '🟢🟢',
+        'buy_dip': '🟢',
+        'accumulate': '🟢',
+        'small_position': '🟡',
+        'hold': '⚪',
+        'wait': '⚪',
+        'trim': '🟡',
+        'take_profit': '🟠',
+        'reduce': '🔴',
+        'sell': '🔴🔴'
+    }
+
+    for rec in recommendations:
+        name = rec.get('index_name', '')[:8]
+        action = rec.get('action', '')
+        action_cn = rec.get('action_cn', '')
+        context = rec.get('context', '')
+        confidence = rec.get('confidence', 0)
+        metrics = rec.get('metrics', {})
+
+        icon = action_icons.get(action, '⚪')
+        confidence_bar = '●' * confidence + '○' * (5 - confidence)
+
+        trend = metrics.get('trend', '-')
+        valuation = metrics.get('valuation', '-')
+        position = metrics.get('position', '-')
+        risk = metrics.get('risk_level', '-')
+
+        # 风险等级颜色
+        risk_icon = '🟢' if risk == '低' else ('🟡' if risk == '中' else '🔴')
+
+        lines.append(f"| {name} | {icon} {action_cn} | {context} | {confidence_bar} | {trend} | {valuation} | {position} | {risk_icon}{risk} |")
+
+    lines.append("")
+
+    # 详细建议（只显示需要关注的）
+    important_recs = [r for r in recommendations if r.get('action') in
+                      ['strong_buy', 'take_profit', 'reduce', 'sell', 'accumulate']]
+
+    if important_recs:
+        lines.append("### 重点关注\n")
+
+        for rec in important_recs:
+            name = rec.get('index_name', '')
+            action_cn = rec.get('action_cn', '')
+            context = rec.get('context', '')
+            reasoning = rec.get('reasoning', [])
+            risk_warnings = rec.get('risk_warning', [])
+            position_advice = rec.get('position_advice', '')
+            metrics = rec.get('metrics', {})
+
+            action = rec.get('action', '')
+            icon = action_icons.get(action, '⚪')
+
+            lines.append(f"#### {icon} {name} - {action_cn}\n")
+            lines.append(f"**情境**: {context}\n")
+
+            if reasoning:
+                lines.append("**分析**:")
+                for r in reasoning:
+                    lines.append(f"- {r}")
+                lines.append("")
+
+            if risk_warnings:
+                lines.append("**风险提示**:")
+                for w in risk_warnings:
+                    lines.append(f"- ⚠️ {w}")
+                lines.append("")
+
+            if position_advice:
+                lines.append(f"**操作建议**: {position_advice}\n")
+
+            # 关键指标
+            est_dd = metrics.get('estimated_drawdown', '')
+            if est_dd:
+                lines.append(f"> 预估最大回撤: {est_dd}\n")
+
+    return "\n".join(lines)
+
+
 def generate_daily_report(
     indices_data: dict,
     north_flow: dict = None,
@@ -807,14 +1037,21 @@ def generate_daily_report(
     lines.append(generate_market_section(indices_data))
     lines.append("\n---\n")
 
-    # 趋势分析（新增）
+    # 趋势分析
     if technical_data:
         trend_section = generate_trend_section(technical_data)
         if trend_section:
             lines.append(trend_section)
             lines.append("\n---\n")
 
-    # 估值分析（新增）
+    # 情境化投资建议（核心新增功能）
+    if technical_data:
+        rec_section = generate_recommendations_section(technical_data)
+        if rec_section:
+            lines.append(rec_section)
+            lines.append("\n---\n")
+
+    # 估值分析
     if technical_data:
         valuation_section = generate_valuation_section(technical_data)
         if valuation_section:

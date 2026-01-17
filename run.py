@@ -116,9 +116,14 @@ def run_portfolio_analysis(with_valuation: bool = True, indices_data: dict = Non
     }
 
 
-def run_news_collection() -> dict:
-    """收集新闻资讯"""
-    return collect_daily_news()
+def run_news_collection(sector_flow: list = None, use_llm: bool = True) -> dict:
+    """收集新闻资讯
+
+    Args:
+        sector_flow: 行业资金流向数据，用于LLM共振分析
+        use_llm: 是否使用LLM进行语义分析
+    """
+    return collect_daily_news(sector_flow=sector_flow, use_llm=use_llm)
 
 
 def main():
@@ -127,9 +132,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python run.py                        # 生成完整报告（含估值、技术分析、情绪分析和新闻）
+  python run.py                        # 生成完整报告（含估值、技术分析、情绪分析、LLM新闻分析）
   python run.py --quick                # 快速模式（只看指数）
   python run.py --no-news              # 跳过新闻收集
+  python run.py --no-llm               # 跳过LLM新闻情绪分析
   python run.py --no-valuation         # 跳过估值计算
   python run.py --no-technical         # 跳过技术分析
   python run.py --no-sentiment         # 跳过情绪分析
@@ -161,6 +167,11 @@ def main():
         '--no-news',
         action='store_true',
         help='跳过新闻收集'
+    )
+    parser.add_argument(
+        '--no-llm',
+        action='store_true',
+        help='跳过LLM新闻情绪分析（加快速度、节省API调用）'
     )
     parser.add_argument(
         '--no-technical',
@@ -222,24 +233,35 @@ def main():
             indices_data=market_data.get('indices')
         )
 
-    # 新闻收集
+    # 新闻收集（传入资金流向数据用于LLM共振分析）
     news_data = {}
     if not args.quick and not args.no_news:
-        news_data = run_news_collection()
+        use_llm = not args.no_llm
+        sector_flow = market_data.get('sector_flow') if use_llm else None
+        news_data = run_news_collection(sector_flow=sector_flow, use_llm=use_llm)
 
-    # 技术分析
-    technical_data = {}
-    if not args.quick and not args.no_technical:
-        technical_data = run_technical_analysis(
-            indices_data=market_data['indices'],
-            portfolio_data=portfolio_data,
-            config=config
-        )
-
-    # 情绪分析
+    # 情绪分析（需要在技术分析之前，因为市场广度数据用于智能信号）
     sentiment_data = {}
     if not args.quick and not args.no_sentiment:
         sentiment_data = run_sentiment_analysis()
+
+    # 技术分析（使用市场广度数据生成智能信号和情境化建议）
+    technical_data = {}
+    if not args.quick and not args.no_technical:
+        # 提取市场广度数据用于智能信号
+        market_breadth = None
+        if sentiment_data and 'breadth' in sentiment_data:
+            breadth_data = sentiment_data['breadth'].get('breadth', {})
+            if breadth_data and 'error' not in breadth_data:
+                market_breadth = breadth_data
+
+        technical_data = run_technical_analysis(
+            indices_data=market_data['indices'],
+            portfolio_data=portfolio_data,
+            config=config,
+            market_breadth=market_breadth,
+            sentiment_data=sentiment_data  # 传递完整情绪数据用于建议生成
+        )
 
     # 生成报告
     print("\n📝 正在生成报告...")

@@ -114,40 +114,33 @@ def get_margin_balance_history(days: int = 30) -> pd.DataFrame:
         return _margin_history_cache[cache_key]
 
     try:
-        # 计算开始日期
-        start_date = (datetime.now() - timedelta(days=days + 30)).strftime("%Y-%m-%d")
+        # 使用汇总数据 API（更稳定）
+        df = ak.stock_margin_account_info()
+        if df is None or df.empty:
+            return pd.DataFrame()
 
-        # 获取沪市数据
-        df_sse = ak.stock_margin_sse(start_date=start_date.replace("-", ""))
-        if df_sse is not None and not df_sse.empty:
-            df_sse = df_sse.rename(columns={
-                '信用交易日期': 'date',
-                '融资余额(元)': 'sse_margin'
-            })
-            df_sse['date'] = pd.to_datetime(df_sse['date'])
-            df_sse['sse_margin'] = df_sse['sse_margin'].astype(float) / 100000000
+        # 确保列名存在
+        if '日期' not in df.columns or '融资余额' not in df.columns:
+            print(f"  融资余额数据列名不匹配: {df.columns.tolist()}")
+            return pd.DataFrame()
 
-            # 获取深市数据
-            df_szse = ak.stock_margin_szse(start_date=start_date.replace("-", ""))
-            if df_szse is not None and not df_szse.empty:
-                df_szse = df_szse.rename(columns={
-                    '交易日期': 'date',
-                    '融资余额(元)': 'szse_margin'
-                })
-                df_szse['date'] = pd.to_datetime(df_szse['date'])
-                df_szse['szse_margin'] = df_szse['szse_margin'].astype(float) / 100000000
+        # 选择需要的列
+        df = df[['日期', '融资余额']].copy()
+        df = df.rename(columns={'日期': 'date', '融资余额': 'margin_balance'})
+        df['date'] = pd.to_datetime(df['date'], errors='coerce')
+        df = df.dropna(subset=['date'])
 
-                # 合并
-                df = df_sse.merge(df_szse[['date', 'szse_margin']], on='date', how='outer')
-                df = df.fillna(0)
-                df['margin_balance'] = df['sse_margin'] + df['szse_margin']
-            else:
-                df = df_sse.copy()
-                df['margin_balance'] = df['sse_margin']
+        if df.empty:
+            return pd.DataFrame()
 
-            df = df[['date', 'margin_balance']].sort_values('date', ascending=False).head(days)
-            _margin_history_cache[cache_key] = df
-            return df
+        # 融资余额单位已是亿元，无需转换
+        df['margin_balance'] = pd.to_numeric(df['margin_balance'], errors='coerce').fillna(0)
+
+        # 按日期降序排列，取最近 days 条
+        df = df.sort_values('date', ascending=False).head(days)
+        _margin_history_cache[cache_key] = df
+        return df
+
     except Exception as e:
         print(f"  获取融资余额历史失败: {e}")
 
@@ -485,12 +478,16 @@ def calculate_equity_bond_ratio(pe: float = None, index_code: str = '000300') ->
 
     cn_10y = bond.get('cn_10y', 0)
 
-    # 获取PE
+    # 获取PE和估值分位
+    pe_percentile = None
     if pe is None:
         try:
-            from src.technical import get_index_valuation
+            from src.technical import get_index_valuation, analyze_index_valuation
             val = get_index_valuation(index_code)
             pe = val.get('pe')
+            # 获取估值分位
+            val_analysis = analyze_index_valuation(index_code, '沪深300')
+            pe_percentile = val_analysis.get('pe_percentile')
         except Exception:
             pass
 
@@ -518,7 +515,7 @@ def calculate_equity_bond_ratio(pe: float = None, index_code: str = '000300') ->
         signal = 'bearish'
         signal_cn = '股票较贵'
 
-    return {
+    result = {
         'pe': round(pe, 2),
         'equity_yield': round(equity_yield, 2),
         'bond_yield': cn_10y,
@@ -527,6 +524,11 @@ def calculate_equity_bond_ratio(pe: float = None, index_code: str = '000300') ->
         'signal': signal,
         'signal_cn': signal_cn
     }
+
+    if pe_percentile is not None:
+        result['pe_percentile'] = pe_percentile
+
+    return result
 
 
 # =============================================================================
@@ -545,30 +547,49 @@ def get_vix_index() -> dict:
             'timestamp': 获取时间
         }
     """
+    # 先尝试 yfinance
     try:
         ticker = yf.Ticker("^VIX")
         hist = ticker.history(period="5d")
 
-        if hist.empty:
-            return {'error': '无法获取VIX数据'}
+        if not hist.empty:
+            latest = hist.iloc[-1]
+            prev = hist.iloc[-2] if len(hist) > 1 else hist.iloc[0]
 
-        latest = hist.iloc[-1]
-        prev = hist.iloc[-2] if len(hist) > 1 else hist.iloc[0]
+            vix = float(latest['Close'])
+            prev_vix = float(prev['Close'])
+            change = vix - prev_vix
+            change_pct = (change / prev_vix) * 100 if prev_vix > 0 else 0
 
-        vix = float(latest['Close'])
-        prev_vix = float(prev['Close'])
-        change = vix - prev_vix
-        change_pct = (change / prev_vix) * 100 if prev_vix > 0 else 0
+            return {
+                'vix': round(vix, 2),
+                'prev_vix': round(prev_vix, 2),
+                'change': round(change, 2),
+                'change_pct': round(change_pct, 2),
+                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+    except Exception:
+        pass
 
-        return {
-            'vix': round(vix, 2),
-            'prev_vix': round(prev_vix, 2),
-            'change': round(change, 2),
-            'change_pct': round(change_pct, 2),
-            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-    except Exception as e:
-        return {'error': f'获取VIX失败: {str(e)}'}
+    # 备选方案：使用 akshare 全球指数
+    try:
+        df = ak.index_global_spot_em()
+        if df is not None and not df.empty:
+            # VIX 在全球指数中的名称可能是 "VIX恐慌指数" 或类似
+            vix_row = df[df['名称'].str.contains('VIX|恐慌', na=False, case=False)]
+            if not vix_row.empty:
+                row = vix_row.iloc[0]
+                return {
+                    'vix': round(float(row.get('最新价', 0)), 2),
+                    'change': round(float(row.get('涨跌额', 0)), 2),
+                    'change_pct': round(float(row.get('涨跌幅', 0)), 2),
+                    'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    'source': 'akshare'
+                }
+    except Exception:
+        pass
+
+    return {'error': '无法获取VIX数据'}
 
 
 def analyze_vix_signal(vix: float = None) -> dict:
@@ -639,42 +660,62 @@ def get_usd_index() -> dict:
             'timestamp': 获取时间
         }
     """
+    # 先尝试 yfinance
     try:
-        # 使用yfinance获取美元指数
         ticker = yf.Ticker("DX-Y.NYB")
         hist = ticker.history(period="5d")
 
-        if hist.empty:
-            # 备用方案：通过akshare
-            df = ak.currency_boc_safe()
-            if df is not None and not df.empty:
-                # 找美元
-                usd_row = df[df['货币名称'].str.contains('美元')]
-                if not usd_row.empty:
-                    return {
-                        'value': float(usd_row.iloc[0].get('中行折算价', 0)),
-                        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        'source': 'boc'
-                    }
-            return {'error': '无法获取美元指数'}
+        if not hist.empty:
+            latest = hist.iloc[-1]
+            prev = hist.iloc[-2] if len(hist) > 1 else hist.iloc[0]
 
-        latest = hist.iloc[-1]
-        prev = hist.iloc[-2] if len(hist) > 1 else hist.iloc[0]
+            value = float(latest['Close'])
+            prev_value = float(prev['Close'])
+            change = value - prev_value
+            change_pct = (change / prev_value) * 100 if prev_value > 0 else 0
 
-        value = float(latest['Close'])
-        prev_value = float(prev['Close'])
-        change = value - prev_value
-        change_pct = (change / prev_value) * 100 if prev_value > 0 else 0
+            return {
+                'value': round(value, 2),
+                'prev_value': round(prev_value, 2),
+                'change': round(change, 2),
+                'change_pct': round(change_pct, 2),
+                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+    except Exception:
+        pass
 
-        return {
-            'value': round(value, 2),
-            'prev_value': round(prev_value, 2),
-            'change': round(change, 2),
-            'change_pct': round(change_pct, 2),
-            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-    except Exception as e:
-        return {'error': f'获取美元指数失败: {str(e)}'}
+    # 备选方案1：使用 akshare 全球指数
+    try:
+        df = ak.index_global_spot_em()
+        if df is not None and not df.empty:
+            usd_row = df[df['名称'].str.contains('美元指数', na=False)]
+            if not usd_row.empty:
+                row = usd_row.iloc[0]
+                return {
+                    'value': round(float(row.get('最新价', 0)), 2),
+                    'change': round(float(row.get('涨跌额', 0)), 2),
+                    'change_pct': round(float(row.get('涨跌幅', 0)), 2),
+                    'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    'source': 'akshare'
+                }
+    except Exception:
+        pass
+
+    # 备选方案2：通过中国银行汇率
+    try:
+        df = ak.currency_boc_safe()
+        if df is not None and not df.empty:
+            usd_row = df[df['货币名称'].str.contains('美元')]
+            if not usd_row.empty:
+                return {
+                    'value': float(usd_row.iloc[0].get('中行折算价', 0)),
+                    'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    'source': 'boc'
+                }
+    except Exception:
+        pass
+
+    return {'error': '无法获取美元指数'}
 
 
 def get_usd_cnh() -> dict:
@@ -688,28 +729,47 @@ def get_usd_cnh() -> dict:
             'timestamp': 获取时间
         }
     """
+    # 先尝试 yfinance
     try:
         ticker = yf.Ticker("CNH=X")
         hist = ticker.history(period="5d")
 
-        if hist.empty:
-            return {'error': '无法获取离岸人民币数据'}
+        if not hist.empty:
+            latest = hist.iloc[-1]
+            prev = hist.iloc[-2] if len(hist) > 1 else hist.iloc[0]
 
-        latest = hist.iloc[-1]
-        prev = hist.iloc[-2] if len(hist) > 1 else hist.iloc[0]
+            value = float(latest['Close'])
+            prev_value = float(prev['Close'])
+            change_pct = ((value - prev_value) / prev_value) * 100 if prev_value > 0 else 0
 
-        value = float(latest['Close'])
-        prev_value = float(prev['Close'])
-        change_pct = ((value - prev_value) / prev_value) * 100 if prev_value > 0 else 0
+            return {
+                'value': round(value, 4),
+                'prev_value': round(prev_value, 4),
+                'change_pct': round(change_pct, 2),
+                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+    except Exception:
+        pass
 
-        return {
-            'value': round(value, 4),
-            'prev_value': round(prev_value, 4),
-            'change_pct': round(change_pct, 2),
-            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-    except Exception as e:
-        return {'error': f'获取离岸人民币失败: {str(e)}'}
+    # 备选方案：使用 akshare 外汇数据
+    try:
+        # 尝试获取人民币汇率中间价
+        df = ak.currency_boc_safe()
+        if df is not None and not df.empty:
+            usd_row = df[df['货币名称'].str.contains('美元', na=False)]
+            if not usd_row.empty:
+                # 中行折算价就是人民币兑美元的汇率
+                value = float(usd_row.iloc[0].get('中行折算价', 0)) / 100  # 转换为 7.xx 格式
+                return {
+                    'value': round(value, 4),
+                    'change_pct': 0,  # 中行数据没有涨跌幅
+                    'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    'source': 'boc'
+                }
+    except Exception:
+        pass
+
+    return {'error': '无法获取离岸人民币数据'}
 
 
 def analyze_usd_trend() -> dict:
